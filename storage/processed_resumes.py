@@ -74,6 +74,11 @@ def init_db() -> None:
         "email_sent_at": "TEXT",
         "approved_at": "TEXT",
         "error_message": "TEXT",
+        # Post-interview fields
+        "interview_outcome": "TEXT",
+        "interview_notes": "TEXT",
+        "offer_sent_at": "TEXT",
+        "offer_details": "TEXT",
     }
     for column, ddl in migrations.items():
         _ensure_column(cursor, "processed", column, ddl)
@@ -310,6 +315,84 @@ def record_candidate_error(file_id: str, job_title: str, error_message: str) -> 
         WHERE file_id = ? AND job_title = ?
         """,
         (error_message, file_id, normalize_job_title(job_title)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_interview_outcome(
+    file_id: str,
+    job_title: str,
+    outcome: str,          # PASSED | FAILED | NO_SHOW
+    notes: str = "",
+) -> None:
+    """Record the result of the interview."""
+    valid = {"PASSED", "FAILED", "NO_SHOW"}
+    if outcome not in valid:
+        raise ValueError(f"outcome must be one of {valid}")
+    action_map = {"PASSED": "INTERVIEWED_PASSED", "FAILED": "INTERVIEWED_FAILED", "NO_SHOW": "NO_SHOW"}
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET interview_outcome = ?,
+            interview_notes   = ?,
+            action_status     = ?
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (outcome, notes, action_map[outcome], file_id, normalize_job_title(job_title)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_offer_sent(
+    file_id: str,
+    job_title: str,
+    offer_details: str = "",
+) -> None:
+    """Record that an offer letter was sent."""
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET action_status  = 'OFFER_SENT',
+            offer_sent_at  = ?,
+            offer_details  = ?
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (datetime.utcnow().isoformat(), offer_details, file_id, normalize_job_title(job_title)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def reschedule_candidate(
+    file_id: str,
+    job_title: str,
+    new_time: str,
+    new_meet_link: str,
+    calendar_event_id: str | None = None,
+) -> None:
+    """Reset candidate to EMAIL_SENT with a new interview slot."""
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET action_status     = 'EMAIL_SENT',
+            interview_time    = ?,
+            meet_link         = ?,
+            calendar_event_id = COALESCE(?, calendar_event_id),
+            interview_outcome = NULL,
+            interview_notes   = NULL,
+            email_sent_at     = ?
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (new_time, new_meet_link, calendar_event_id,
+         datetime.utcnow().isoformat(), file_id, normalize_job_title(job_title)),
     )
     conn.commit()
     conn.close()

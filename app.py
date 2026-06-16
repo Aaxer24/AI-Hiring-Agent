@@ -5,7 +5,12 @@ import streamlit as st
 
 from agents.jd_generator_agent import generate_jd
 from config.settings import settings
-from services.candidate_actions import approve_candidate_for_interview
+from services.candidate_actions import (
+    approve_candidate_for_interview,
+    record_interview_result,
+    reschedule_candidate_interview,
+    send_offer_letter,
+)
 from storage.db_reader import get_candidates_for_job
 from storage.processed_resumes import (
     create_job,
@@ -13,6 +18,7 @@ from storage.processed_resumes import (
     get_job_stats,
     init_db,
     list_jobs,
+    mark_interview_outcome,
     reject_candidate,
     reset_job_candidates,
     stop_active_job,
@@ -257,6 +263,8 @@ if active_job:
     )
 
     # ── Metric tiles ──────────────────────────────────────────────────────────
+    interviewed = stats.get('shortlisted', 0)
+    passed_n = 0
     st.markdown(
         f"""<div class="metric-grid">
             <div class="metric-tile">
@@ -417,9 +425,10 @@ with tab_review:
     shortlisted_df = df[df["decision"] == "SHORTLIST"]
     rejected_df = df[df["decision"] == "REJECT"]
 
-    sub_pending, sub_shortlisted, sub_rejected, sub_all = st.tabs([
+    sub_pending, sub_shortlisted, sub_post, sub_rejected, sub_all = st.tabs([
         f"⏳ Pending Approval ({len(pending_df)})",
         f"✅ Shortlisted ({len(shortlisted_df)})",
+        f"🎤 Interview Tracking",
         f"❌ Rejected ({len(rejected_df)})",
         f"📋 All Candidates ({len(df)})",
     ])
@@ -501,7 +510,10 @@ with tab_review:
             for _, row in shortlisted_df.iterrows():
                 score = row["score"] or 0
                 score_cls = "score-high" if score >= 75 else "score-mid"
-                status_icon = {"EMAIL_SENT": "📧", "PENDING_REVIEW": "⏳", "REJECTED": "❌", "ERROR": "⚠️"}.get(row["action_status"], "❓")
+                status_icon = {"EMAIL_SENT": "📧", "PENDING_REVIEW": "⏳", "REJECTED": "❌",
+                               "ERROR": "⚠️", "INTERVIEWED_PASSED": "🏆",
+                               "INTERVIEWED_FAILED": "❌", "NO_SHOW": "👻",
+                               "OFFER_SENT": "🎉"}.get(row["action_status"], "❓")
 
                 st.markdown(
                     f"""<div class="cand-card">
@@ -519,6 +531,139 @@ with tab_review:
                     </div>""",
                     unsafe_allow_html=True,
                 )
+
+    # ── POST-INTERVIEW TRACKING ───────────────────────────────────────────────
+    with sub_post:
+        invited_df = df[df["action_status"].isin(["EMAIL_SENT", "INTERVIEWED_PASSED",
+                                                   "INTERVIEWED_FAILED", "NO_SHOW", "OFFER_SENT"])]
+        if invited_df.empty:
+            st.markdown(
+                """<div class="hp-card" style="text-align:center;padding:40px">
+                    <p style="font-size:36px;margin:0">🎤</p>
+                    <p style="color:#8b949e;margin:12px 0 0 0;font-weight:600">No candidates have been invited yet.</p>
+                    <p style="color:#8b949e;font-size:13px;margin:6px 0 0 0">Approve shortlisted candidates first.</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown('<div class="section-title">Record interview results & send offers</div>', unsafe_allow_html=True)
+
+            for _, row in invited_df.reset_index(drop=True).iterrows():
+                score      = row["score"] or 0
+                status     = row["action_status"]
+                score_cls  = "score-high" if score >= 75 else "score-mid"
+                status_map = {
+                    "EMAIL_SENT": ("📧", "#388bfd", "Invited"),
+                    "NO_SHOW":    ("👻", "#8b949e", "No-Show"),
+                    "INTERVIEWED_PASSED": ("🏆", "#3fb950", "Passed"),
+                    "INTERVIEWED_FAILED": ("❌", "#f85149", "Failed"),
+                    "OFFER_SENT": ("🎉", "#d29922", "Offer Sent"),
+                }
+                icon, colour, label = status_map.get(status, ("❓", "#8b949e", status))
+
+                with st.container():
+                    st.markdown(
+                        f"""<div class="cand-card">
+                            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                                <div>
+                                    <span style="font-size:16px;font-weight:700;color:#e6edf3">{row['name'] or 'Unknown'}</span><br>
+                                    <span style="color:#8b949e;font-size:13px">{row['email'] or 'No email'}</span>
+                                </div>
+                                <div style="display:flex;gap:10px;align-items:center">
+                                    <span class="score-badge {score_cls}">{score} pts</span>
+                                    <span style="color:{colour};font-size:13px;font-weight:600">{icon} {label}</span>
+                                </div>
+                            </div>
+                            {f'<p style="color:#8b949e;font-size:12px;margin:8px 0 0 0">🕐 Interview: {row["interview_time"]}</p>' if row.get('interview_time') else ''}
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+
+                    # ── Record outcome (only if still EMAIL_SENT or NO_SHOW) ──
+                    if status in ("EMAIL_SENT", "NO_SHOW"):
+                        st.markdown("**Record Interview Outcome:**")
+                        notes = st.text_input(
+                            "Notes (optional)",
+                            key=f"notes-{row['file_id']}",
+                            placeholder="e.g. Strong problem-solving, weak system design",
+                        )
+                        o1, o2, o3, o4 = st.columns(4)
+                        if o1.button("🏆 Passed", key=f"pass-{row['file_id']}", use_container_width=True):
+                            record_interview_result(row["file_id"], active_job["normalized_title"], "PASSED", notes)
+                            st.success(f"{row['name']} marked as Passed!")
+                            time.sleep(0.6); st.rerun()
+
+                        if o2.button("❌ Failed", key=f"fail-{row['file_id']}", use_container_width=True):
+                            record_interview_result(row["file_id"], active_job["normalized_title"], "FAILED", notes)
+                            st.warning(f"{row['name']} marked as Failed.")
+                            time.sleep(0.6); st.rerun()
+
+                        if o3.button("👻 No-Show", key=f"noshow-{row['file_id']}", use_container_width=True):
+                            record_interview_result(row["file_id"], active_job["normalized_title"], "NO_SHOW", notes)
+                            st.info(f"{row['name']} marked as No-Show.")
+                            time.sleep(0.6); st.rerun()
+
+                        # Reschedule
+                        with o4.expander("🔄 Reschedule"):
+                            new_slot = st.number_input(
+                                "New slot #", 0, 20, 1,
+                                key=f"reslot-{row['file_id']}",
+                            )
+                            if st.button("Send new invite", key=f"resend-{row['file_id']}"):
+                                with st.spinner("Rescheduling…"):
+                                    try:
+                                        res = reschedule_candidate_interview(
+                                            row["file_id"], active_job["normalized_title"], int(new_slot)
+                                        )
+                                        st.success(f"Rescheduled: {res['interview_time']}")
+                                        time.sleep(0.8); st.rerun()
+                                    except Exception as e:
+                                        st.error(str(e))
+
+                    # ── Send offer (only if Passed) ──────────────────────────
+                    if status == "INTERVIEWED_PASSED":
+                        st.markdown("**🎉 Send Offer Letter:**")
+                        off1, off2 = st.columns(2)
+                        salary_val = off1.text_input(
+                            "Salary / Package",
+                            placeholder="e.g. ₹12 LPA",
+                            key=f"salary-{row['file_id']}",
+                        )
+                        joining_val = off2.text_input(
+                            "Expected Joining Date",
+                            placeholder="e.g. 01 Aug 2026",
+                            key=f"joining-{row['file_id']}",
+                        )
+                        extra = st.text_area(
+                            "Additional notes",
+                            placeholder="Benefits, perks, role details…",
+                            height=80,
+                            key=f"extra-{row['file_id']}",
+                        )
+                        if st.button("📨 Send Offer Letter", key=f"offer-{row['file_id']}",
+                                     type="primary", use_container_width=False):
+                            with st.spinner("Sending offer letter…"):
+                                try:
+                                    send_offer_letter(
+                                        row["file_id"], active_job["normalized_title"],
+                                        salary=salary_val, joining_date=joining_val, extra_notes=extra,
+                                    )
+                                    st.success(f"🎉 Offer letter sent to {row['name']}!")
+                                    st.balloons()
+                                    time.sleep(1); st.rerun()
+                                except Exception as e:
+                                    st.error(str(e))
+
+                    if status == "OFFER_SENT":
+                        st.success(f"✅ Offer sent on {row.get('offer_sent_at', '')[:10]}  ·  {row.get('offer_details', '')}")
+
+                    if status == "INTERVIEWED_FAILED":
+                        st.markdown(
+                            f"<p style='color:#8b949e;font-size:13px'>Notes: {row.get('interview_notes') or '—'}</p>",
+                            unsafe_allow_html=True,
+                        )
+
+                    st.markdown("---")
 
     # ── REJECTED ──────────────────────────────────────────────────────────────
     with sub_rejected:
