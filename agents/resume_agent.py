@@ -1,55 +1,30 @@
-import json
-import re
 import io
+import logging
+
 import pdfplumber
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
 
-load_dotenv()
+from config.settings import settings
+from models.schemas import ParsedResume, parse_model, to_dict
 
-"""
-This file:
--Takes the downloaded PDF bytes
--Extracts text using pdfplumber
--Sends text to LLM
--Converts resume into structured JSON like:
--Returns:
-{
-  "name": "",
-  "email": "",
-  "skills": [],
-  "experience_years": "",
-  "projects": []
-}
-"""
-
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+logger = logging.getLogger(__name__)
+llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
 
 
-def extract_text(file_bytes):
-    text = ""
+def extract_text(file_bytes: bytes) -> str:
+    text_parts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
-            if page.extract_text():
-                text += page.extract_text()
-    return text
+            page_text = page.extract_text()
+            if page_text:
+                text_parts.append(page_text)
+    return "\n".join(text_parts)
 
 
-def extract_json(text: str):
-    """
-    Safely extract JSON object from LLM output
-    """
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
-        return None
-
-
-def parse_resume(resume_dict):
+def parse_resume(resume_dict: dict):
     resume_text = extract_text(resume_dict["content"])
+    if not resume_text.strip():
+        logger.warning("Resume %s had no extractable text", resume_dict.get("filename"))
 
     prompt = f"""
 You MUST return ONLY valid JSON.
@@ -60,7 +35,7 @@ Schema:
   "name": "",
   "email": "",
   "skills": [],
-  "experience_years": "",
+  "experience_years": 0,
   "projects": []
 }}
 
@@ -69,19 +44,9 @@ Resume:
 """
 
     response = llm.invoke(prompt).content
-    structured = extract_json(response)
-
-    # FINAL SAFETY FALLBACK
-    if structured is None:
-        structured = {
-            "name": "Unknown",
-            "email": "",
-            "skills": [],
-            "experience_years": "",
-            "projects": []
-        }
+    structured = parse_model(ParsedResume, response, ParsedResume())
 
     return {
         "raw_text": resume_text,
-        "structured": structured
+        "structured": to_dict(structured),
     }

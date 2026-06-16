@@ -1,9 +1,7 @@
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
+from config.settings import settings
 
-load_dotenv()
-
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
 
 
 def generate_jd(job_title: str, requirements: str = ""):

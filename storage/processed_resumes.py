@@ -1,41 +1,56 @@
-import sqlite3
+import json
 import os
-
-"""This file handles all database operations for processed resumes.
-It keeps track of which resumes have already been processed for each job to avoid duplicates.
-It also stores candidate details, screening results, and interview information.
-The design ensures idempotency, safe updates, and clean persistence for the hiring pipeline."""
+import sqlite3
+from datetime import datetime
+from typing import Any
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "storage", "processed_resumes.db")
 
 
-# -------------------------------------------------
-# DB INIT
-# -------------------------------------------------
-def is_already_processed(file_id: str, job_title: str) -> bool:
+def normalize_job_title(job_title: str) -> str:
+    return job_title.lower().strip()
+
+
+def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor() # Cursor executes SQL queries
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    return dict(row) if row else None
+
+
+def _ensure_column(cursor: sqlite3.Cursor, table: str, column: str, ddl: str) -> None:
+    cursor.execute(f"PRAGMA table_info({table})")
+    columns = {row[1] for row in cursor.fetchall()}
+    if column not in columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def init_db() -> None:
+    conn = _connect()
+    cursor = conn.cursor()
 
     cursor.execute(
         """
-        SELECT 1 FROM processed
-        WHERE file_id = ? AND job_title = ?
-        """,
-        (file_id, job_title)
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            normalized_title TEXT NOT NULL,
+            requirements TEXT,
+            jd_text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ACTIVE',
+            score_threshold REAL NOT NULL DEFAULT 70,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
     )
 
-    exists = cursor.fetchone() is not None
-    conn.close()
-    return exists
-# Checks if the resume exists in the database for the given job title.Decision can be anything: REJECT, HOLD, SHORTLIST. Used before running screening logic.
-
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS processed (
             file_id TEXT,
             job_title TEXT,
@@ -48,32 +63,121 @@ def init_db():
             processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (file_id, job_title)
         )
-    """)
-
-    conn.commit()
-    conn.close() # Close the connection after committing changes
-
-
-# CHECK IF ALREADY SHORTLISTED (IDEMPOTENCY)
-def was_shortlisted(file_id: str, job_title: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
         """
-        SELECT 1 FROM processed
-        WHERE file_id = ? AND job_title = ? AND decision = 'SHORTLIST'
-        """,
-        (file_id, job_title)
     )
 
-    exists = cursor.fetchone() is not None
+    migrations = {
+        "filename": "TEXT",
+        "breakdown_json": "TEXT",
+        "action_status": "TEXT DEFAULT 'PENDING_REVIEW'",
+        "calendar_event_id": "TEXT",
+        "email_sent_at": "TEXT",
+        "approved_at": "TEXT",
+        "error_message": "TEXT",
+    }
+    for column, ddl in migrations.items():
+        _ensure_column(cursor, "processed", column, ddl)
+
+    conn.commit()
     conn.close()
-    return exists
-#Checks if the decision was SHORTLISTED for the given resume and job title.Used after screening. Prevents duplicate interview actions
 
 
-# PERSIST RESULT (SAFE, JOB-SCOPED)
+def create_job(
+    *,
+    title: str,
+    requirements: str,
+    jd_text: str,
+    score_threshold: float,
+) -> int:
+    init_db()
+    normalized_title = normalize_job_title(title)
+    conn = _connect()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE jobs SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP")
+    cursor.execute(
+        """
+        INSERT INTO jobs(title, normalized_title, requirements, jd_text, status, score_threshold)
+        VALUES (?, ?, ?, ?, 'ACTIVE', ?)
+        """,
+        (title.strip(), normalized_title, requirements.strip(), jd_text, score_threshold),
+    )
+    job_id = int(cursor.lastrowid)
+    conn.commit()
+    conn.close()
+    return job_id
+
+
+def stop_active_job() -> None:
+    init_db()
+    conn = _connect()
+    conn.execute("UPDATE jobs SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE status = 'ACTIVE'")
+    conn.commit()
+    conn.close()
+
+
+def get_active_job() -> dict[str, Any] | None:
+    init_db()
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM jobs
+        WHERE status = 'ACTIVE'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    return _row_to_dict(row)
+
+
+def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
+    init_db()
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM jobs
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def is_already_processed(file_id: str, job_title: str) -> bool:
+    init_db()
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT 1 FROM processed
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (file_id, normalize_job_title(job_title)),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def was_shortlisted(file_id: str, job_title: str) -> bool:
+    init_db()
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT 1 FROM processed
+        WHERE file_id = ?
+          AND job_title = ?
+          AND decision = 'SHORTLIST'
+          AND action_status IN ('APPROVED', 'SCHEDULED', 'EMAIL_SENT')
+        """,
+        (file_id, normalize_job_title(job_title)),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
 def mark_processed(
     *,
     file_id: str,
@@ -82,39 +186,130 @@ def mark_processed(
     email: str,
     score: float,
     decision: str,
-    interview_time: str = None,
-    meet_link: str = None
-):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
+    filename: str | None = None,
+    breakdown: dict[str, Any] | None = None,
+    interview_time: str | None = None,
+    meet_link: str | None = None,
+) -> None:
+    init_db()
+    normalized_title = normalize_job_title(job_title)
+    decision = decision.upper()
+    action_status = "PENDING_REVIEW" if decision == "SHORTLIST" else "REJECTED"
+    conn = _connect()
+    conn.execute(
         """
         INSERT OR REPLACE INTO processed(
             file_id,
             job_title,
+            filename,
             name,
             email,
             score,
             decision,
             interview_time,
-            meet_link
+            meet_link,
+            breakdown_json,
+            action_status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
-            job_title,
+            normalized_title,
+            filename,
             name,
             email,
             score,
             decision,
             interview_time,
-            meet_link
-        )
+            meet_link,
+            json.dumps(breakdown or {}),
+            action_status,
+        ),
     )
-
     conn.commit()
     conn.close()
-    
-    # It remembers what has already been processed so the system doesn’t repeat work or make mistakes
+
+
+def get_candidate(file_id: str, job_title: str) -> dict[str, Any] | None:
+    init_db()
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM processed
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (file_id, normalize_job_title(job_title)),
+    ).fetchone()
+    conn.close()
+    return _row_to_dict(row)
+
+
+def update_candidate_approval(
+    *,
+    file_id: str,
+    job_title: str,
+    interview_time: str,
+    meet_link: str,
+    calendar_event_id: str | None,
+) -> None:
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET action_status = 'EMAIL_SENT',
+            interview_time = ?,
+            meet_link = ?,
+            calendar_event_id = ?,
+            email_sent_at = ?,
+            approved_at = COALESCE(approved_at, ?),
+            error_message = NULL
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (
+            interview_time,
+            meet_link,
+            calendar_event_id,
+            datetime.utcnow().isoformat(),
+            datetime.utcnow().isoformat(),
+            file_id,
+            normalize_job_title(job_title),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def reject_candidate(file_id: str, job_title: str) -> None:
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET action_status = 'REJECTED',
+            approved_at = NULL,
+            error_message = NULL
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (file_id, normalize_job_title(job_title)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def record_candidate_error(file_id: str, job_title: str, error_message: str) -> None:
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET action_status = 'ERROR',
+            error_message = ?
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (error_message, file_id, normalize_job_title(job_title)),
+    )
+    conn.commit()
+    conn.close()

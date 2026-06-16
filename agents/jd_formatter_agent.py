@@ -1,8 +1,7 @@
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
-load_dotenv()
+from config.settings import settings
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
 
 def format_for_platforms(jd_text):
     prompt = f"""

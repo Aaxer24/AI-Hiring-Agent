@@ -1,10 +1,8 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
-import os
-from dotenv import load_dotenv
-load_dotenv()
+from config.settings import settings
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
 
 prompt = PromptTemplate(
     input_variables=["jd"],

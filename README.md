@@ -1,13 +1,15 @@
 # AI Hiring Agent
 
-Autonomous hiring workflow built with Streamlit, LangChain, LangGraph, and Google API integrations.
+Local-first AI hiring workflow built with Streamlit, LangChain, OpenAI, SQLite, and Google Drive/Gmail/Calendar integrations.
 
-## Features
+## What It Does
 
-- Generate job descriptions for open roles.
-- Start and stop hiring workflows from a Streamlit dashboard.
-- Process resumes and candidate information.
-- Schedule interviews and send email updates through Google integrations.
+- Creates job descriptions from role requirements.
+- Stores hiring jobs in SQLite instead of temporary state files.
+- Watches a Google Drive folder for new PDF resumes.
+- Parses and screens candidates against the active job.
+- Stores candidate score, decision, status, and interview metadata.
+- Requires human approval before sending interview emails or creating Calendar events.
 
 ## Setup
 
@@ -18,10 +20,26 @@ Autonomous hiring workflow built with Streamlit, LangChain, LangGraph, and Googl
    pip install -r requirements.txt
    ```
 
-3. Create a local `.env` file with the required API keys and configuration.
-4. Add Google OAuth credentials under `credentials/`.
+3. Copy `.env.example` to `.env` and fill in:
 
-## Run
+   ```bash
+   OPENAI_API_KEY=
+   GOOGLE_DRIVE_FOLDER_ID=
+   ```
+
+4. Put your Google OAuth client file at:
+
+   ```text
+   credentials/credentials.json
+   ```
+
+5. Generate or refresh the Google token:
+
+   ```bash
+   python run_oauth.py
+   ```
+
+## Run Locally
 
 Start the dashboard:
 
@@ -29,12 +47,21 @@ Start the dashboard:
 streamlit run app.py
 ```
 
-Start the background worker separately when needed:
+Start the background worker in another terminal:
 
 ```bash
 python run_agent_worker.py
 ```
 
-## Notes
+## Workflow
 
-Local secrets, OAuth tokens, generated job state, resumes, spreadsheets, and virtual environments are intentionally excluded from Git.
+1. Open the dashboard.
+2. Generate a job description.
+3. Start the hiring job.
+4. Run the worker so resumes are fetched and screened.
+5. Review shortlisted candidates in the dashboard.
+6. Click approve to create the Calendar event and send the interview email.
+
+## Safety Notes
+
+Secrets, OAuth tokens, resumes, generated databases, and virtual environments are excluded from Git. Candidate emails and interview metadata are stored locally in SQLite.
