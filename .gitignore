@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local configuration and secrets
+.env
+.env.*
+credentials/
+*.pem
+*.key
+*.secret
+
+# Runtime/generated files
+job_state.json
+jd.txt
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Data and documents that may contain candidate information
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.csv
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

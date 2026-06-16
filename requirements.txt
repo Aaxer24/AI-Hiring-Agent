@@ -1,0 +1,28 @@
+# Core Backend
+fastapi
+uvicorn
+
+# UI
+streamlit
+
+# LLM & Agent Frameworks
+langchain
+langchain-openai
+langgraph
+
+# Embeddings & Vector DB
+faiss-cpu
+scikit-learn
+numpy
+
+# PDF Parsing
+pdfplumber
+pymupdf
+
+# Google APIs
+google-api-python-client
+google-auth
+google-auth-oauthlib
+
+# Env Management
+python-dotenv
