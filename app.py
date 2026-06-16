@@ -6,6 +6,7 @@ import streamlit as st
 from agents.jd_generator_agent import generate_jd
 from config.settings import settings
 from services.candidate_actions import (
+    advance_to_next_round,
     approve_candidate_for_interview,
     record_interview_result,
     reschedule_candidate_interview,
@@ -620,39 +621,144 @@ with tab_review:
                                     except Exception as e:
                                         st.error(str(e))
 
-                    # ── Send offer (only if Passed) ──────────────────────────
+                    # ── Send offer OR schedule next round (only if Passed) ──
                     if status == "INTERVIEWED_PASSED":
-                        st.markdown("**🎉 Send Offer Letter:**")
-                        off1, off2 = st.columns(2)
-                        salary_val = off1.text_input(
-                            "Salary / Package",
-                            placeholder="e.g. ₹12 LPA",
-                            key=f"salary-{row['file_id']}",
+                        prev_round   = row.get("interview_round") or 1
+                        prev_type    = row.get("round_type") or "Initial Interview"
+                        next_round_n = prev_round + 1
+                        ordinal      = {1:"1st",2:"2nd",3:"3rd"}.get(next_round_n, f"{next_round_n}th")
+
+                        st.markdown(
+                            f"""<div class="hp-card" style="margin-top:12px;padding:16px 20px">
+                                <p style="margin:0 0 4px 0;font-size:13px;color:#3fb950;font-weight:600">
+                                    ✅ Passed Round {prev_round} — {prev_type}
+                                </p>
+                                <p style="margin:0;font-size:12px;color:#8b949e">Choose what happens next ↓</p>
+                            </div>""",
+                            unsafe_allow_html=True,
                         )
-                        joining_val = off2.text_input(
-                            "Expected Joining Date",
-                            placeholder="e.g. 01 Aug 2026",
-                            key=f"joining-{row['file_id']}",
-                        )
-                        extra = st.text_area(
-                            "Additional notes",
-                            placeholder="Benefits, perks, role details…",
-                            height=80,
-                            key=f"extra-{row['file_id']}",
-                        )
-                        if st.button("📨 Send Offer Letter", key=f"offer-{row['file_id']}",
-                                     type="primary", use_container_width=False):
-                            with st.spinner("Sending offer letter…"):
-                                try:
-                                    send_offer_letter(
-                                        row["file_id"], active_job["normalized_title"],
-                                        salary=salary_val, joining_date=joining_val, extra_notes=extra,
-                                    )
-                                    st.success(f"🎉 Offer letter sent to {row['name']}!")
-                                    st.balloons()
-                                    time.sleep(1); st.rerun()
-                                except Exception as e:
-                                    st.error(str(e))
+
+                        next_tab, offer_tab = st.tabs([
+                            f"🎤 Schedule {ordinal} Round",
+                            "🎉 Send Offer Letter",
+                        ])
+
+                        # —— Next Round tab ——————————————————————
+                        with next_tab:
+                            nr1, nr2 = st.columns([2, 1])
+
+                            round_presets = [
+                                "Technical Round",
+                                "System Design Round",
+                                "HR Discussion",
+                                "Managerial Round",
+                                "CTO / Founder Interview",
+                                "Culture Fit Interview",
+                                "Assignment Review",
+                                "Custom — type below",
+                            ]
+                            preset = nr1.selectbox(
+                                f"Round type for {ordinal} round",
+                                round_presets,
+                                key=f"preset-{row['file_id']}",
+                            )
+                            custom_type = ""
+                            if preset == "Custom — type below":
+                                custom_type = nr1.text_input(
+                                    "Describe this round",
+                                    placeholder="e.g. Live Coding Challenge",
+                                    key=f"custom-round-{row['file_id']}",
+                                )
+                            round_type_final = custom_type.strip() if preset == "Custom — type below" else preset
+
+                            round_desc = nr1.text_area(
+                                "What should the candidate know about this round? (shown in email)",
+                                placeholder="e.g. This round will focus on data structures, algorithms and a 45-min live coding problem on LeetCode-style questions.",
+                                height=100,
+                                key=f"round-desc-{row['file_id']}",
+                            )
+
+                            next_slot = nr2.number_input(
+                                "Interview slot #",
+                                min_value=0, max_value=20, value=0,
+                                key=f"nextslot-{row['file_id']}",
+                                help="0=tomorrow 10am, 1=tomorrow 2pm, 2=tomorrow 4pm, 3=day after 10am…",
+                            )
+
+                            if round_type_final:
+                                st.markdown(
+                                    f"""<div style="background:#0d1117;border:1px solid #30363d;
+                                        border-radius:8px;padding:12px 16px;margin-top:8px">
+                                        <p style="margin:0 0 6px 0;font-size:12px;color:#8b949e;
+                                           text-transform:uppercase;letter-spacing:.05em">Email preview</p>
+                                        <p style="margin:0;font-size:13px;color:#e6edf3">
+                                            <strong>Subject:</strong> Round {next_round_n} Interview Invitation — {round_type_final} | {settings.company_name}<br>
+                                            <strong>To:</strong> {row['email'] or 'candidate@email.com'}<br>
+                                            <em style="color:#8b949e">Congratulations email + Calendar invite will be sent automatically.</em>
+                                        </p>
+                                    </div>""",
+                                    unsafe_allow_html=True,
+                                )
+
+                            st.markdown("")
+                            if st.button(
+                                f"🚀 Send {ordinal} Round Invite",
+                                key=f"nextround-{row['file_id']}",
+                                type="primary",
+                                disabled=not round_type_final,
+                            ):
+                                with st.spinner(f"Scheduling {ordinal} round and sending invite…"):
+                                    try:
+                                        res = advance_to_next_round(
+                                            file_id=row["file_id"],
+                                            job_title=active_job["normalized_title"],
+                                            slot_index=int(next_slot),
+                                            round_type=round_type_final,
+                                        )
+                                        st.success(
+                                            f"✅ {ordinal} round ({round_type_final}) scheduled — "
+                                            f"{res['interview_time']}. Invite sent!"
+                                        )
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(str(e))
+
+                        # —— Offer Letter tab —————————————————————
+                        with offer_tab:
+                            off1, off2 = st.columns(2)
+                            salary_val = off1.text_input(
+                                "Salary / Package",
+                                placeholder="e.g. ₹12 LPA",
+                                key=f"salary-{row['file_id']}",
+                            )
+                            joining_val = off2.text_input(
+                                "Expected Joining Date",
+                                placeholder="e.g. 01 Aug 2026",
+                                key=f"joining-{row['file_id']}",
+                            )
+                            extra = st.text_area(
+                                "Additional notes",
+                                placeholder="Benefits, perks, role details…",
+                                height=80,
+                                key=f"extra-{row['file_id']}",
+                            )
+                            if st.button(
+                                "📨 Send Offer Letter",
+                                key=f"offer-{row['file_id']}",
+                                type="primary",
+                            ):
+                                with st.spinner("Sending offer letter…"):
+                                    try:
+                                        send_offer_letter(
+                                            row["file_id"], active_job["normalized_title"],
+                                            salary=salary_val, joining_date=joining_val, extra_notes=extra,
+                                        )
+                                        st.success(f"🎉 Offer letter sent to {row['name']}!")
+                                        st.balloons()
+                                        time.sleep(1); st.rerun()
+                                    except Exception as e:
+                                        st.error(str(e))
 
                     if status == "OFFER_SENT":
                         st.success(f"✅ Offer sent on {row.get('offer_sent_at', '')[:10]}  ·  {row.get('offer_details', '')}")

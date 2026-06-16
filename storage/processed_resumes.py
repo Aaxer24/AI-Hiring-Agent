@@ -79,6 +79,9 @@ def init_db() -> None:
         "interview_notes": "TEXT",
         "offer_sent_at": "TEXT",
         "offer_details": "TEXT",
+        # Multi-round tracking
+        "interview_round": "INTEGER DEFAULT 1",
+        "round_type": "TEXT DEFAULT 'Initial Interview'",
     }
     for column, ddl in migrations.items():
         _ensure_column(cursor, "processed", column, ddl)
@@ -393,6 +396,43 @@ def reschedule_candidate(
         """,
         (new_time, new_meet_link, calendar_event_id,
          datetime.utcnow().isoformat(), file_id, normalize_job_title(job_title)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def schedule_next_round(
+    file_id: str,
+    job_title: str,
+    new_time: str,
+    new_meet_link: str,
+    round_number: int,
+    round_type: str,
+    calendar_event_id: str | None = None,
+) -> None:
+    """Advance candidate to the next interview round."""
+    init_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE processed
+        SET action_status     = 'EMAIL_SENT',
+            interview_time    = ?,
+            meet_link         = ?,
+            calendar_event_id = COALESCE(?, calendar_event_id),
+            interview_outcome = NULL,
+            interview_notes   = NULL,
+            email_sent_at     = ?,
+            interview_round   = ?,
+            round_type        = ?
+        WHERE file_id = ? AND job_title = ?
+        """,
+        (
+            new_time, new_meet_link, calendar_event_id,
+            datetime.utcnow().isoformat(),
+            round_number, round_type,
+            file_id, normalize_job_title(job_title),
+        ),
     )
     conn.commit()
     conn.close()
