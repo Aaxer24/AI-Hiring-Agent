@@ -313,3 +313,39 @@ def record_candidate_error(file_id: str, job_title: str, error_message: str) -> 
     )
     conn.commit()
     conn.close()
+
+
+def reset_job_candidates(job_title: str) -> int:
+    """Delete all processed rows for a job so the worker re-screens every file."""
+    init_db()
+    conn = _connect()
+    cursor = conn.execute(
+        "DELETE FROM processed WHERE job_title = ?",
+        (normalize_job_title(job_title),),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def get_job_stats(job_title: str) -> dict:
+    """Return quick summary counts for dashboard metrics."""
+    init_db()
+    conn = _connect()
+    normalized = normalize_job_title(job_title)
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*)                                             AS total,
+            SUM(CASE WHEN decision='SHORTLIST' THEN 1 ELSE 0 END) AS shortlisted,
+            SUM(CASE WHEN decision='REJECT'    THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN action_status='EMAIL_SENT' THEN 1 ELSE 0 END) AS invited,
+            SUM(CASE WHEN action_status='PENDING_REVIEW' AND decision='SHORTLIST' THEN 1 ELSE 0 END) AS awaiting
+        FROM processed
+        WHERE job_title = ?
+        """,
+        (normalized,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else {"total": 0, "shortlisted": 0, "rejected": 0, "invited": 0, "awaiting": 0}
