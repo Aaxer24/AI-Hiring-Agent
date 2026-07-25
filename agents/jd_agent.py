@@ -1,8 +1,7 @@
-from langchain_openai import ChatOpenAI
+from config.llm_factory import get_llm
 from langchain_core.prompts import PromptTemplate
-from config.settings import settings
 
-llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
+llm = get_llm()
 
 prompt = PromptTemplate(
     input_variables=["jd"],

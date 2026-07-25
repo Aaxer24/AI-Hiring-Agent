@@ -2,13 +2,12 @@ import io
 import logging
 
 import pdfplumber
-from langchain_openai import ChatOpenAI
 
-from config.settings import settings
+from config.llm_factory import get_llm
 from models.schemas import ParsedResume, parse_model, to_dict
 
 logger = logging.getLogger(__name__)
-llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
+llm = get_llm()
 
 
 def extract_text(file_bytes: bytes) -> str:

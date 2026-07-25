@@ -1,7 +1,6 @@
-from langchain_openai import ChatOpenAI
-from config.settings import settings
+from config.llm_factory import get_llm
 
-llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
+llm = get_llm()
 
 
 def generate_jd(job_title: str, requirements: str = ""):

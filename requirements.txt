@@ -8,6 +8,9 @@ streamlit
 # LLM & Agent Frameworks
 langchain
 langchain-openai
+langchain-groq
+langchain-huggingface
+sentence-transformers
 langgraph
 
 # Embeddings & Vector DB

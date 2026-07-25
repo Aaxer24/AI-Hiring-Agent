@@ -41,3 +41,5 @@ jd.txt
 Thumbs.db
 .vscode/
 .idea/
+
+generate_docs.py

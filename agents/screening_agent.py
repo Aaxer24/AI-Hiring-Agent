@@ -1,15 +1,15 @@
 import logging
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from sklearn.metrics.pairwise import cosine_similarity
 
+from config.llm_factory import get_llm, get_embeddings
 from config.settings import settings
 from models.schemas import CandidateProfile, HiringIntent, parse_model, to_dict
 
 logger = logging.getLogger(__name__)
 
-embeddings = OpenAIEmbeddings(model=settings.openai_embedding_model)
-llm = ChatOpenAI(model=settings.openai_chat_model, temperature=0)
+embeddings = get_embeddings()
+llm = get_llm()
 
 
 def _dump_model(model):
